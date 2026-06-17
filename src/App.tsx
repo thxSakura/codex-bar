@@ -41,6 +41,33 @@ function resetLabel(window: RateWindow) {
   });
 }
 
+function resetDisplayLabel(window: RateWindow) {
+  return resetLabel(window);
+}
+
+function resetTooltipLabel(window: RateWindow) {
+  const reset = parseResetAt(window);
+  if (!reset) return "";
+  if (isWeeklyWindow(window) && reset.getTime() - Date.now() >= 24 * 60 * 60 * 1000) {
+    return `${reset.getMonth() + 1}月${reset.getDate()}日`;
+  }
+  return formatClockTime(reset);
+}
+
+function parseResetAt(window: RateWindow) {
+  if (!window.resetAt) return null;
+  const reset = new Date(window.resetAt);
+  return Number.isNaN(reset.getTime()) ? null : reset;
+}
+
+function formatClockTime(date: Date) {
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function isWeeklyWindow(window: RateWindow) {
+  return (window.windowMinutes ?? 0) >= 7 * 24 * 60;
+}
+
 function formatTokenCount(value: number) {
   return `${formatTokenAmount(value)} Token`;
 }
@@ -48,6 +75,9 @@ function formatTokenCount(value: number) {
 function formatTokenAmount(value: number) {
   if (value >= 100_000_000) {
     return `${trimFixed(value / 100_000_000)}亿`;
+  }
+  if (value < 10_000) {
+    return value.toLocaleString("zh-CN", { maximumFractionDigits: 0 });
   }
   return `${trimFixed(value / 10_000)}万`;
 }
@@ -59,10 +89,20 @@ function trimFixed(value: number) {
   });
 }
 
-function UsageBars({ win, accent }: { win: RateWindow; accent: "cyan" | "amber" | "green" }) {
+type UsageAccent = "green" | "amber" | "red";
+
+function usageAccent(remaining: number): UsageAccent {
+  if (remaining >= 60) return "green";
+  if (remaining >= 30) return "amber";
+  return "red";
+}
+
+function UsageBars({ win }: { win: RateWindow }) {
   const used = Math.max(0, Math.min(100, Math.round(win.usedPercent)));
   const remaining = 100 - used;
   const filled = Math.round(remaining / 4);
+  const accent = usageAccent(remaining);
+  const resetTooltip = resetTooltipLabel(win);
   return (
     <div className="usage-row">
       <div className="usage-label">{windowLabel(win.windowMinutes) || win.title}</div>
@@ -75,22 +115,23 @@ function UsageBars({ win, accent }: { win: RateWindow; accent: "cyan" | "amber" 
         ))}
       </div>
       <div className="usage-percent">{remaining}%</div>
-      <div className="usage-reset">{resetLabel(win)}</div>
+      <div
+        className="usage-reset"
+        data-tooltip={resetTooltip || undefined}
+      >
+        {resetDisplayLabel(win)}
+      </div>
     </div>
   );
 }
 
-function ProviderCard({ title, windows, spark }: { title: string; windows: RateWindow[]; spark?: boolean }) {
+function ProviderCard({ title, windows }: { title: string; windows: RateWindow[] }) {
   return (
     <section className="provider-card">
       <div className="provider-title">{title}</div>
       <div className="window-list">
-        {windows.map((win, index) => (
-          <UsageBars
-            accent={spark ? "green" : index === 0 ? "cyan" : "amber"}
-            key={win.id}
-            win={win}
-          />
+        {windows.map((win) => (
+          <UsageBars key={win.id} win={win} />
         ))}
       </div>
     </section>
@@ -307,7 +348,7 @@ export default function App() {
           <div className="cards">
             <ProviderCard title="Codex" windows={grouped.codex} />
             {grouped.spark.length ? (
-              <ProviderCard spark title="GPT-5.3-Codex-Spark" windows={grouped.spark} />
+              <ProviderCard title="GPT-5.3-Codex-Spark" windows={grouped.spark} />
             ) : null}
           </div>
           <Heatmap days={heatmap} />

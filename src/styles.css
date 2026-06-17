@@ -178,7 +178,41 @@ select {
 }
 
 .usage-reset {
+  position: relative;
   text-align: right;
+}
+
+.usage-reset[data-tooltip] {
+  cursor: default;
+}
+
+.usage-reset[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 7px);
+  z-index: 20;
+  padding: 5px 8px;
+  border-radius: 7px;
+  color: #f4f7f8;
+  background: rgba(35, 42, 48, 0.96);
+  box-shadow: 0 8px 22px rgba(31, 42, 51, 0.22);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.usage-reset[data-tooltip]:hover::before {
+  content: "";
+  position: absolute;
+  right: 10px;
+  bottom: calc(100% + 2px);
+  z-index: 21;
+  border: 5px solid transparent;
+  border-top-color: rgba(35, 42, 48, 0.96);
+  pointer-events: none;
 }
 
 .pill-track {
@@ -204,6 +238,10 @@ select {
 
 .pill-green {
   background: linear-gradient(180deg, #43e562, #22c547);
+}
+
+.pill-red {
+  background: linear-gradient(180deg, #ff7766, #e44737);
 }
 
 .heatmap-panel {
