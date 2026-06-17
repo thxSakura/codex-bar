@@ -2,6 +2,8 @@
 
 Windows 系统托盘 Codex 用量弹窗初版。
 
+![Codex Usage Tray 截图](docs/screenshot.png)
+
 ## 功能
 
 - 托盘常驻，左键点击显示/隐藏弹窗。
@@ -48,3 +50,7 @@ npm run tauri:dev
 ```powershell
 npm run tauri:build
 ```
+
+## 许可证
+
+Apache License 2.0
