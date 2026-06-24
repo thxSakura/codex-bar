@@ -6,8 +6,8 @@ use std::{
     fs,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    sync::Mutex,
+    process::{Child, Command, Stdio},
+    sync::{mpsc, Mutex},
     time::{Duration, Instant},
 };
 use tauri::{
@@ -374,21 +374,52 @@ fn fetch_usage_via_app_server() -> Result<UsageSnapshot, String> {
         .flush()
         .map_err(|e| format!("刷新 Codex app-server stdin 失败: {e}"))?;
 
-    let mut reader = BufReader::new(stdout);
+    let (line_tx, line_rx) = mpsc::channel::<Result<Option<String>, String>>();
+    let reader_handle = std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => {
+                    let _ = line_tx.send(Ok(None));
+                    break;
+                }
+                Ok(_) => {
+                    if line_tx.send(Ok(Some(line))).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    let _ = line_tx.send(Err(format!("读取 Codex app-server 响应失败: {error}")));
+                    break;
+                }
+            }
+        }
+    });
+
     let deadline = Instant::now() + Duration::from_secs(APP_SERVER_TIMEOUT_SECS);
-    let mut line = String::new();
     let mut account: Option<Value> = None;
     let mut rate_limits: Option<Value> = None;
     let mut last_error: Option<String> = None;
+    let mut timed_out = false;
 
-    while Instant::now() < deadline {
-        line.clear();
-        let bytes = reader
-            .read_line(&mut line)
-            .map_err(|e| format!("读取 Codex app-server 响应失败: {e}"))?;
-        if bytes == 0 {
+    while account.is_none() || rate_limits.is_none() {
+        let now = Instant::now();
+        if now >= deadline {
+            timed_out = true;
             break;
         }
+
+        let wait_for = (deadline - now).min(Duration::from_millis(250));
+        let line = match line_rx.recv_timeout(wait_for) {
+            Ok(Ok(Some(line))) => line,
+            Ok(Ok(None)) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Ok(Err(error)) => {
+                stop_app_server_child(&mut child, reader_handle);
+                return Err(error);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+        };
         let trimmed = line.trim();
         if !trimmed.starts_with('{') {
             continue;
@@ -404,30 +435,36 @@ fn fetch_usage_via_app_server() -> Result<UsageSnapshot, String> {
             Some(3) => rate_limits = response_payload(&value),
             _ => {}
         }
-        if account.is_some() && rate_limits.is_some() {
-            break;
-        }
     }
 
     let exited = child.try_wait().ok().flatten();
 
-    let rate_limits = rate_limits.ok_or_else(|| {
+    let Some(rate_limits) = rate_limits else {
         let hint = "无法从 Codex app-server 读取限额。请先在普通 PowerShell 运行 `codex app-server`；如果看到 Access is denied，请不要使用 WindowsApps 包内 codex.exe，改用可执行的 Codex CLI wrapper 或设置 CODEX_BIN。";
-        if let Some(status) = exited {
+        let error = if timed_out {
+            last_error.unwrap_or_else(|| {
+                format!("{hint} {APP_SERVER_TIMEOUT_SECS} 秒内没有收到完整响应。")
+            })
+        } else if let Some(status) = exited {
             last_error.unwrap_or_else(|| format!("{hint} codex 进程退出状态: {status}"))
         } else {
-            let _ = child.kill();
-            let _ = child.wait();
             last_error.unwrap_or_else(|| hint.to_string())
-        }
-    })?;
-    let _ = child.kill();
-    let _ = child.wait();
+        };
+        stop_app_server_child(&mut child, reader_handle);
+        return Err(error);
+    };
+    stop_app_server_child(&mut child, reader_handle);
     Ok(build_usage_snapshot_from_app_server(
         account.as_ref(),
         &rate_limits,
         None,
     ))
+}
+
+fn stop_app_server_child(child: &mut Child, reader_handle: std::thread::JoinHandle<()>) {
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = reader_handle.join();
 }
 
 fn spawn_codex_app_server() -> Result<std::process::Child, String> {
