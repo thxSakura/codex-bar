@@ -65,7 +65,11 @@ function formatClockTime(date: Date) {
 }
 
 function isWeeklyWindow(window: RateWindow) {
-  return (window.windowMinutes ?? 0) >= 7 * 24 * 60;
+  return displayWindowLabel(window) === "7天";
+}
+
+function displayWindowLabel(window: RateWindow) {
+  return windowLabel(window.windowMinutes) || window.title;
 }
 
 function formatTokenCount(value: number) {
@@ -105,7 +109,7 @@ function UsageBars({ win }: { win: RateWindow }) {
   const resetTooltip = resetTooltipLabel(win);
   return (
     <div className="usage-row">
-      <div className="usage-label">{windowLabel(win.windowMinutes) || win.title}</div>
+      <div className="usage-label">{displayWindowLabel(win)}</div>
       <div className="pill-track" aria-label={`${win.title} 剩余 ${remaining}%`}>
         {Array.from({ length: 25 }).map((_, index) => (
           <span
@@ -188,6 +192,20 @@ function dedupeWindows(windows: RateWindow[]) {
     seen.add(key);
     return true;
   });
+}
+
+function collapseWeeklyOnlyWindows(windows: RateWindow[]) {
+  if (windows.length <= 1 || !windows.every(isWeeklyWindow)) return windows;
+
+  const mostInformative = windows.reduce((best, candidate) =>
+    resetInformationScore(candidate) > resetInformationScore(best) ? candidate : best,
+  );
+  return [mostInformative];
+}
+
+function resetInformationScore(window: RateWindow) {
+  if (parseResetAt(window)) return 2;
+  return window.resetDescription?.trim() ? 1 : 0;
 }
 
 function sameWindow(left: RateWindow, right: RateWindow) {
@@ -306,7 +324,8 @@ export default function App() {
     const other = usage.extraRateWindows
       .filter((win) => !win.id.includes("spark"))
       .filter((win) => !codex.some((base) => sameWindow(base, win)));
-    return { codex: dedupeWindows(codex.concat(other)), spark };
+    const codexWindows = collapseWeeklyOnlyWindows(dedupeWindows(codex.concat(other)));
+    return { codex: codexWindows, spark };
   }, [usage]);
 
   async function updateSettings(patch: Partial<AppSettings>) {
