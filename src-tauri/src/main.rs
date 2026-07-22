@@ -1,3 +1,5 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -108,6 +110,9 @@ struct AppState {
 }
 
 fn main() {
+    #[cfg(target_os = "macos")]
+    let _ = fix_path_env::fix();
+
     tauri::Builder::default()
         .manage(AppState {
             cache: Mutex::new(load_cache()),
@@ -155,9 +160,13 @@ fn attach_focus_handler(window: &WebviewWindow) {
 fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let refresh = MenuItem::with_id(app, "refresh", "刷新", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+    #[cfg(windows)]
     let autostart = MenuItem::with_id(app, "autostart", "切换开机启动", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    #[cfg(windows)]
     let menu = Menu::with_items(app, &[&refresh, &settings, &autostart, &quit])?;
+    #[cfg(not(windows))]
+    let menu = Menu::with_items(app, &[&refresh, &settings, &quit])?;
 
     TrayIconBuilder::with_id("codex-usage")
         .tooltip("Codex Usage")
@@ -186,6 +195,7 @@ fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 let _ = show_popup(app);
                 let _ = app.emit("open-settings", ());
             }
+            #[cfg(windows)]
             "autostart" => {
                 let _ = toggle_autostart_from_menu(app);
             }
@@ -440,7 +450,7 @@ fn fetch_usage_via_app_server() -> Result<UsageSnapshot, String> {
     let exited = child.try_wait().ok().flatten();
 
     let Some(rate_limits) = rate_limits else {
-        let hint = "无法从 Codex app-server 读取限额。请先在普通 PowerShell 运行 `codex app-server`；如果看到 Access is denied，请不要使用 WindowsApps 包内 codex.exe，改用可执行的 Codex CLI wrapper 或设置 CODEX_BIN。";
+        let hint = codex_app_server_help();
         let error = if timed_out {
             last_error.unwrap_or_else(|| {
                 format!("{hint} {APP_SERVER_TIMEOUT_SECS} 秒内没有收到完整响应。")
@@ -479,9 +489,27 @@ fn spawn_codex_app_server() -> Result<std::process::Child, String> {
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    command
-        .spawn()
-        .map_err(|e| format!("启动 `codex app-server` 失败: {e}"))
+    command.spawn().map_err(|e| {
+        format!(
+            "启动 `codex app-server` 失败: {e}。{}",
+            codex_app_server_help()
+        )
+    })
+}
+
+fn codex_app_server_help() -> &'static str {
+    #[cfg(windows)]
+    {
+        "请先在普通 PowerShell 运行 `codex app-server`；如果看到 Access is denied，请不要使用 WindowsApps 包内 codex.exe，改用可执行的 Codex CLI wrapper 或设置 CODEX_BIN。"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "请先在 Terminal 运行 `which codex` 和 `codex app-server`；如果找不到命令，请安装 Codex CLI，或设置 CODEX_BIN 指向 Codex CLI 的绝对路径。"
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        "请先在终端运行 `codex app-server`；如果找不到命令，请安装 Codex CLI，或设置 CODEX_BIN 指向 Codex CLI 的绝对路径。"
+    }
 }
 
 fn codex_app_server_command() -> Result<Command, String> {
@@ -526,15 +554,27 @@ fn resolve_codex_executable() -> Result<PathBuf, String> {
         }
         return Err(format!("CODEX_BIN 指向的文件不存在: {}", path.display()));
     }
-    Ok(PathBuf::from("codex"))
+    find_in_path("codex").ok_or_else(|| {
+        "未找到可直接执行的 Codex CLI。请先在终端运行 `which codex`；如果找不到命令，请安装 Codex CLI，或设置 CODEX_BIN 指向 Codex CLI 的绝对路径。".to_string()
+    })
 }
 
-#[cfg(windows)]
 fn find_in_path(name: &str) -> Option<PathBuf> {
     let paths = std::env::var_os("PATH")?;
     std::env::split_paths(&paths)
         .map(|dir| dir.join(name))
-        .find(|candidate| candidate.exists() && !is_windowsapps_path(candidate))
+        .find(|candidate| {
+            candidate.is_file() && {
+                #[cfg(windows)]
+                {
+                    !is_windowsapps_path(candidate)
+                }
+                #[cfg(not(windows))]
+                {
+                    true
+                }
+            }
+        })
 }
 
 #[cfg(windows)]
@@ -1076,14 +1116,13 @@ fn update_settings(app: AppHandle, settings: SettingsPatch) -> Result<AppSetting
     }
     if let Some(value) = settings.autostart {
         set_autostart(value)?;
-        cache.settings.autostart = value;
-    } else {
-        cache.settings.autostart = autostart_enabled();
     }
+    cache.settings.autostart = autostart_enabled();
     save_cache(&cache);
     Ok(cache.settings.clone())
 }
 
+#[cfg(windows)]
 fn toggle_autostart_from_menu(app: &AppHandle) -> Result<(), String> {
     let next = !autostart_enabled();
     set_autostart(next)?;
