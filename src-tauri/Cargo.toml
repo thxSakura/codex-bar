@@ -1,7 +1,7 @@
 [package]
 name = "win-codex-usage-tray"
 version = "0.1.0"
-description = "Windows tray popup for Codex usage"
+description = "Cross-platform tray popup for Codex usage"
 authors = ["Codex"]
 license = "Apache-2.0"
 edition = "2021"
@@ -19,3 +19,6 @@ tokio = { version = "1.40", features = ["process", "time"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
